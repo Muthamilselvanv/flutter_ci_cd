@@ -9,7 +9,7 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   //String name = 100;  show GitHub Actions CI/CD pipeline error because of type mismatch
-  String name = "muthu";
+  //String name = "muthu";
   @override
   Widget build(BuildContext context) {
     return Scaffold(

@@ -8,17 +8,11 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  //String name = 100;  show GitHub Actions CI/CD pipeline error because of type mismatch
-  //String name = "muthu";
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Home Page'),
-      ),
-      body: const Center(
-        child: Text('Welcome to the Home Page!'),
-      ),
+      appBar: AppBar(title: const Text('Home Page')),
+      body: const Center(child: Text('Welcome to the Home Page!')),
     );
   }
 }

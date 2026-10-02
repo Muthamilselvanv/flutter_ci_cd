@@ -1,4 +1,4 @@
-name: Flutter CI/CD
+name: Flutter CI/CD name
 
 on:
   # Pull requests get quality checks, but ordinary commits do not build apps.

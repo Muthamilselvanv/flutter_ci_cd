@@ -33,6 +33,9 @@ migrate_working_dir/
 /build/
 /coverage/
 
+# Local environment values. Commit .env.example, never .env.
+.env
+
 # Symbolication related
 app.*.symbols
 

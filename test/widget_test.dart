@@ -10,14 +10,19 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_ci_cd/main.dart';
 
 void main() {
-  testWidgets('Home Page displays correctly', (WidgetTester tester) async {
+  testWidgets('default environment is displayed', (WidgetTester tester) async {
     // Build our app and trigger a frame.
     await tester.pumpWidget(const MyApp());
 
-    // Verify that the Home Page title is displayed.
-    expect(find.text('Home Page'), findsOneWidget);
-
-    // Verify that the welcome message is displayed.
-    expect(find.text('Welcome to the Home Page!'), findsOneWidget);
+    expect(find.text('Environment Demo'), findsOneWidget);
+    expect(find.text('Environment: development'), findsOneWidget);
+    expect(
+      find.text('API: https://gulftest.traitsolutions.in/RestApi/app_api'),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Web: https://gulftest.traitsolutions.in/RestApi/web_api/'),
+      findsOneWidget,
+    );
   });
 }

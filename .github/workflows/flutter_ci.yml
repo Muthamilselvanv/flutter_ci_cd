@@ -1,4 +1,4 @@
-name: Flutter CI/CD name
+name: Flutter CI/CD
 
 on:
   # Pull requests get quality checks, but ordinary commits do not build apps.
@@ -90,6 +90,7 @@ jobs:
         run: flutter pub get
 
       - name: Validate variables and select flavor
+        id: config
         shell: bash
         run: |
           if [[ -z "$API_BASE_URL" || -z "$WEB_BASE_URL" ]]; then
@@ -99,13 +100,13 @@ jobs:
 
           case "$APP_ENV" in
             development)
-              echo "FLAVOR=dev" >> "$GITHUB_ENV"
+              echo "flavor=dev" >> "$GITHUB_OUTPUT"
               ;;
             staging)
-              echo "FLAVOR=staging" >> "$GITHUB_ENV"
+              echo "flavor=staging" >> "$GITHUB_OUTPUT"
               ;;
             production)
-              echo "FLAVOR=production" >> "$GITHUB_ENV"
+              echo "flavor=production" >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "Unsupported environment: $APP_ENV"
@@ -114,26 +115,26 @@ jobs:
           esac
 
       - name: Build development or staging APK
-        if: env.FLAVOR != 'production'
+        if: steps.config.outputs.flavor != 'production'
         run: >
           flutter build apk
           --release
-          --flavor ${{ env.FLAVOR }}
+          --flavor ${{ steps.config.outputs.flavor }}
           --dart-define=APP_ENV=${{ env.APP_ENV }}
           --dart-define=API_BASE_URL=${{ env.API_BASE_URL }}
           --dart-define=WEB_BASE_URL=${{ env.WEB_BASE_URL }}
 
       - name: Upload APK
-        if: env.FLAVOR != 'production'
+        if: steps.config.outputs.flavor != 'production'
         uses: actions/upload-artifact@v4
         with:
-          name: flutter-${{ env.FLAVOR }}-release-apk
-          path: build/app/outputs/flutter-apk/app-${{ env.FLAVOR }}-release.apk
+          name: flutter-${{ steps.config.outputs.flavor }}-release-apk
+          path: build/app/outputs/flutter-apk/app-${{ steps.config.outputs.flavor }}-release.apk
           if-no-files-found: error
           retention-days: 14
 
       - name: Build production AAB
-        if: env.FLAVOR == 'production'
+        if: steps.config.outputs.flavor == 'production'
         run: >
           flutter build appbundle
           --release
@@ -143,7 +144,7 @@ jobs:
           --dart-define=WEB_BASE_URL=${{ env.WEB_BASE_URL }}
 
       - name: Upload production AAB
-        if: env.FLAVOR == 'production'
+        if: steps.config.outputs.flavor == 'production'
         uses: actions/upload-artifact@v4
         with:
           name: flutter-production-release-aab

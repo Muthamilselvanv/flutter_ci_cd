@@ -29,17 +29,17 @@ environment variables or `.env` by itself.
 
 ## 2. CI environment
 
-`.github/workflows/flutter_ci.yml` reads `API_BASE_URL` and `WEB_BASE_URL` from
-the selected GitHub Environment. Its build command passes those values into the
-Flutter compiler:
+Build workflows read `API_BASE_URL` and `WEB_BASE_URL` from the selected GitHub
+Environment and pass those values into the Flutter compiler:
 
 ```text
 GitHub Actions env -> --dart-define -> AppConfig -> controller -> screen
 ```
 
-Pull requests to `main`, `develop`, or `staging` run formatting, analysis, and
-tests without building an app. Builds are created only when someone selects
-**Actions > Flutter CI/CD > Run workflow**, or pushes a `v*` production tag.
+Pull requests and pushes to `main` run formatting, analysis, and tests without
+building an app. A testing APK is created manually through **Actions > Build
+Testing APK > Run workflow**. Production artifacts are created only by pushing
+a `v*` tag.
 
 Create `development`, `staging`, and `production` under **Repository Settings >
 Environments**. Add these environment variables to each environment:
@@ -49,9 +49,9 @@ API_BASE_URL
 WEB_BASE_URL
 ```
 
-Manual `development` and `staging` runs produce APKs. A manual `production` run
-or a tag such as `v1.0.0` produces an AAB. Add required reviewers to the
-production GitHub Environment if releases need approval.
+Manual `development` and `staging` runs produce APKs. A tag such as `v1.0.0`
+produces a production APK and AAB. Add required reviewers to the production
+GitHub Environment if releases need approval.
 
 ## 3. Android flavors
 
@@ -83,3 +83,37 @@ script could translate it into Dart defines; neither behavior is automatic.
 Never store real secrets in Dart defines or a mobile `.env`: compiled mobile
 apps can be inspected. Keep secrets on a backend or in a CI secret store and
 only inject non-secret app configuration such as URLs and environment names.
+
+## CI, testing APK, and release workflows
+
+The workflows have separate responsibilities:
+
+| Workflow | Trigger | Purpose |
+| --- | --- | --- |
+| `flutter_ci.yml` | Pull request to `main`, or push to `main` | Format, analyze, and test |
+| `flutter_test_apk.yml` | Manual **Run workflow** action | Build a development/staging APK for testers |
+| `flutter_release.yml` | Push a tag matching `v*` | Test and build production APK/AAB artifacts |
+
+Create GitHub Environments named `development`, `staging`, and `production`.
+In each environment, add variables named `API_BASE_URL` and `WEB_BASE_URL`.
+The manual testing workflow intentionally cannot select production.
+
+To obtain a testing APK, open the repository on GitHub, select **Actions**,
+select **Build Testing APK**, choose **Run workflow**, select the environment
+and build mode, and run it. Download the APK from the run's **Artifacts** area.
+
+Before a release, update `version:` in `pubspec.yaml`, commit and push the
+changes, wait for Flutter CI to pass, and then create the version tag:
+
+```powershell
+git add pubspec.yaml .github/workflows README.md
+git commit -m "ci: separate validation, testing APK, and release workflows"
+git push origin main
+git tag -a v1.0.1 -m "Add separate testing and release workflows"
+git tag
+git push origin v1.0.1
+```
+
+`actions/upload-artifact` stores build files on the workflow run. It does not
+create a public GitHub Release page. Also replace the current debug signing
+configuration with a protected release keystore before publishing to a store.

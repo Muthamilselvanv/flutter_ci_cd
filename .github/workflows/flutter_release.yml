@@ -1,0 +1,78 @@
+name: Flutter Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Test and build production artifacts
+    runs-on: ubuntu-latest
+    environment: production
+
+    env:
+      APP_ENV: production
+      API_BASE_URL: ${{ vars.API_BASE_URL }}
+      WEB_BASE_URL: ${{ vars.WEB_BASE_URL }}
+
+    steps:
+      - name: Checkout tagged source code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Run tests
+        run: flutter test
+
+      - name: Validate production configuration
+        shell: bash
+        run: |
+          if [[ -z "$API_BASE_URL" || -z "$WEB_BASE_URL" ]]; then
+            echo "API_BASE_URL and WEB_BASE_URL are required in the production GitHub Environment."
+            exit 1
+          fi
+
+      - name: Build production APK
+        run: >
+          flutter build apk
+          --release
+          --flavor production
+          --dart-define=APP_ENV=${{ env.APP_ENV }}
+          --dart-define=API_BASE_URL=${{ env.API_BASE_URL }}
+          --dart-define=WEB_BASE_URL=${{ env.WEB_BASE_URL }}
+
+      - name: Build production AAB
+        run: >
+          flutter build appbundle
+          --release
+          --flavor production
+          --dart-define=APP_ENV=${{ env.APP_ENV }}
+          --dart-define=API_BASE_URL=${{ env.API_BASE_URL }}
+          --dart-define=WEB_BASE_URL=${{ env.WEB_BASE_URL }}
+
+      - name: Upload production APK and AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-production-${{ github.ref_name }}
+          path: |
+            build/app/outputs/flutter-apk/app-production-release.apk
+            build/app/outputs/bundle/productionRelease/app-production-release.aab
+          if-no-files-found: error
+          retention-days: 30

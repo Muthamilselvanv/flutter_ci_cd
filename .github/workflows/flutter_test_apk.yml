@@ -1,0 +1,96 @@
+name: Build Testing APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment for the testing APK
+        required: true
+        default: development
+        type: choice
+        options:
+          - development
+          - staging
+      build_mode:
+        description: Debug is faster; release is closer to production
+        required: true
+        default: debug
+        type: choice
+        options:
+          - debug
+          - release
+
+permissions:
+  contents: read
+
+jobs:
+  build-testing-apk:
+    name: Build ${{ inputs.environment }} ${{ inputs.build_mode }} APK
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    env:
+      APP_ENV: ${{ inputs.environment }}
+      API_BASE_URL: ${{ vars.API_BASE_URL }}
+      WEB_BASE_URL: ${{ vars.WEB_BASE_URL }}
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Run tests
+        run: flutter test
+
+      - name: Validate configuration and select flavor
+        id: config
+        shell: bash
+        run: |
+          if [[ -z "$API_BASE_URL" || -z "$WEB_BASE_URL" ]]; then
+            echo "API_BASE_URL and WEB_BASE_URL are required in the '$APP_ENV' GitHub Environment."
+            exit 1
+          fi
+
+          case "$APP_ENV" in
+            development)
+              echo "flavor=dev" >> "$GITHUB_OUTPUT"
+              ;;
+            staging)
+              echo "flavor=staging" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Unsupported testing environment: $APP_ENV"
+              exit 1
+              ;;
+          esac
+
+      - name: Build testing APK
+        run: >
+          flutter build apk
+          --${{ inputs.build_mode }}
+          --flavor ${{ steps.config.outputs.flavor }}
+          --dart-define=APP_ENV=${{ env.APP_ENV }}
+          --dart-define=API_BASE_URL=${{ env.API_BASE_URL }}
+          --dart-define=WEB_BASE_URL=${{ env.WEB_BASE_URL }}
+
+      - name: Upload testing APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-${{ steps.config.outputs.flavor }}-${{ inputs.build_mode }}-apk
+          path: build/app/outputs/flutter-apk/app-${{ steps.config.outputs.flavor }}-${{ inputs.build_mode }}.apk
+          if-no-files-found: error
+          retention-days: 14

@@ -1,78 +1,283 @@
-name: Flutter Release
+name: Flutter Release Preparation
 
 on:
   push:
     tags:
       - 'v*'
 
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release version in vMAJOR.MINOR.PATCH format
+        required: true
+        type: string
+      confirm_release:
+        description: I confirm this production artifact build
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: flutter-production-release
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
+env:
+  FLUTTER_VERSION: '3.47.5'
+  MIN_LINE_COVERAGE: '50'
+
 jobs:
-  release:
-    name: Test and build production artifacts
+  prepare:
+    name: Verify release source and version
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      build_number: ${{ steps.release.outputs.build_number }}
+      release_tag: ${{ steps.release.outputs.release_tag }}
+      short_sha: ${{ steps.release.outputs.short_sha }}
+
+    steps:
+      - name: Checkout complete history
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Verify commit belongs to main
+        shell: bash
+        run: |
+          git fetch origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/main"; then
+            echo "Release commit must belong to the main branch history."
+            exit 1
+          fi
+
+      - name: Derive and validate release version
+        id: release
+        env:
+          MANUAL_TAG: ${{ inputs.release_tag }}
+          CONFIRM_RELEASE: ${{ inputs.confirm_release }}
+        shell: bash
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            release_tag="$GITHUB_REF_NAME"
+          else
+            if [[ "$CONFIRM_RELEASE" != "true" ]]; then
+              echo "Manual production release was not confirmed."
+              exit 1
+            fi
+            release_tag="$MANUAL_TAG"
+          fi
+
+          if [[ ! "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must match vMAJOR.MINOR.PATCH, for example v1.2.3."
+            exit 1
+          fi
+
+          pubspec_version="$(awk '/^version:/ {print $2}' pubspec.yaml)"
+          version_name="${pubspec_version%%+*}"
+          build_number="${pubspec_version#*+}"
+          tag_version="${release_tag#v}"
+
+          if [[ "$pubspec_version" != *+* || ! "$build_number" =~ ^[0-9]+$ ]]; then
+            echo "pubspec.yaml version must use MAJOR.MINOR.PATCH+BUILD_NUMBER."
+            exit 1
+          fi
+
+          if [[ "$tag_version" != "$version_name" ]]; then
+            echo "Tag $release_tag does not match pubspec version $version_name."
+            exit 1
+          fi
+
+          echo "version=$version_name" >> "$GITHUB_OUTPUT"
+          echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+  quality:
+    name: Run release quality and security gates
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout complete history
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Check formatting
+        run: dart format --output=none --set-exit-if-changed lib test tool
+
+      - name: Analyze project
+        run: flutter analyze
+
+      - name: Run tests with coverage
+        run: flutter test --coverage --reporter expanded
+
+      - name: Enforce minimum line coverage
+        run: dart run tool/check_coverage.dart ${{ env.MIN_LINE_COVERAGE }}
+
+      - name: Scan for secrets
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITLEAKS_ENABLE_COMMENTS: 'false'
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'false'
+
+  build:
+    name: Build signed production artifacts
+    needs:
+      - prepare
+      - quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     environment: production
 
     env:
       APP_ENV: production
       API_BASE_URL: ${{ vars.API_BASE_URL }}
       WEB_BASE_URL: ${{ vars.WEB_BASE_URL }}
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
     steps:
-      - name: Checkout tagged source code
-        uses: actions/checkout@v4
+      - name: Checkout release source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Setup Java
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
         with:
           distribution: temurin
           java-version: '17'
           cache: gradle
 
       - name: Setup Flutter
-        uses: subosito/flutter-action@v2
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
           cache: true
 
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Run tests
-        run: flutter test
-
-      - name: Validate production configuration
+      - name: Validate production configuration and signing secrets
         shell: bash
         run: |
-          if [[ -z "$API_BASE_URL" || -z "$WEB_BASE_URL" ]]; then
-            echo "API_BASE_URL and WEB_BASE_URL are required in the production GitHub Environment."
-            exit 1
-          fi
+          required=(
+            API_BASE_URL
+            WEB_BASE_URL
+            ANDROID_KEYSTORE_BASE64
+            ANDROID_KEYSTORE_PASSWORD
+            ANDROID_KEY_ALIAS
+            ANDROID_KEY_PASSWORD
+          )
 
-      - name: Build production APK
+          for variable in "${required[@]}"; do
+            if [[ -z "${!variable}" ]]; then
+              echo "Required production configuration is missing: $variable"
+              exit 1
+            fi
+          done
+
+      - name: Restore Android release signing
+        shell: bash
+        run: |
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/release-keystore.jks
+          {
+            echo "storePassword=$ANDROID_KEYSTORE_PASSWORD"
+            echo "keyPassword=$ANDROID_KEY_PASSWORD"
+            echo "keyAlias=$ANDROID_KEY_ALIAS"
+            echo "storeFile=release-keystore.jks"
+          } > android/key.properties
+          chmod 600 android/app/release-keystore.jks android/key.properties
+
+      - name: Build signed production APK
         run: >
           flutter build apk
           --release
           --flavor production
+          --build-name=${{ needs.prepare.outputs.version }}
+          --build-number=${{ needs.prepare.outputs.build_number }}
           --dart-define=APP_ENV=${{ env.APP_ENV }}
           --dart-define=API_BASE_URL=${{ env.API_BASE_URL }}
           --dart-define=WEB_BASE_URL=${{ env.WEB_BASE_URL }}
 
-      - name: Build production AAB
+      - name: Build signed production AAB
         run: >
           flutter build appbundle
           --release
           --flavor production
+          --build-name=${{ needs.prepare.outputs.version }}
+          --build-number=${{ needs.prepare.outputs.build_number }}
           --dart-define=APP_ENV=${{ env.APP_ENV }}
           --dart-define=API_BASE_URL=${{ env.API_BASE_URL }}
           --dart-define=WEB_BASE_URL=${{ env.WEB_BASE_URL }}
 
-      - name: Upload production APK and AAB
-        uses: actions/upload-artifact@v4
+      - name: Verify artifact signatures
+        shell: bash
+        run: |
+          apksigner="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          if [[ -z "$apksigner" ]]; then
+            echo "Android apksigner was not found."
+            exit 1
+          fi
+
+          "$apksigner" verify --verbose build/app/outputs/flutter-apk/app-production-release.apk
+          jarsigner -verify build/app/outputs/bundle/productionRelease/app-production-release.aab
+
+      - name: Create versioned release package
+        shell: bash
+        run: |
+          version="${{ needs.prepare.outputs.version }}"
+          build_number="${{ needs.prepare.outputs.build_number }}"
+          release_tag="${{ needs.prepare.outputs.release_tag }}"
+          short_sha="${{ needs.prepare.outputs.short_sha }}"
+
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-production-release.apk \
+            "dist/app-production-v${version}+${build_number}.apk"
+          cp build/app/outputs/bundle/productionRelease/app-production-release.aab \
+            "dist/app-production-v${version}+${build_number}.aab"
+
+          {
+            echo "Release: $release_tag"
+            echo "Version: $version"
+            echo "Build number: $build_number"
+            echo "Commit: $GITHUB_SHA"
+            echo "Flutter: $FLUTTER_VERSION"
+            echo "Environment: production"
+          } > dist/release-info.txt
+
+          cp CHANGELOG.md dist/CHANGELOG.md
+
+          cd dist
+          sha256sum *.apk *.aab > SHA256SUMS.txt
+
+      - name: Upload signed release package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: flutter-production-${{ github.ref_name }}
-          path: |
-            build/app/outputs/flutter-apk/app-production-release.apk
-            build/app/outputs/bundle/productionRelease/app-production-release.aab
+          name: flutter-production-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.short_sha }}
+          path: dist/
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 90
+
+      - name: Remove restored signing files
+        if: ${{ always() }}
+        shell: bash
+        run: rm -f android/app/release-keystore.jks android/key.properties

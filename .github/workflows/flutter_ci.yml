@@ -3,37 +3,217 @@ name: Flutter CI
 on:
   pull_request:
     branches:
+      - dev
       - main
 
   push:
     branches:
+      - dev
       - main
+
+  workflow_dispatch:
+
+concurrency:
+  group: flutter-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
-jobs:
-  validate:
-    name: Format, analyze, and test
-    runs-on: ubuntu-latest
+env:
+  FLUTTER_VERSION: '3.47.5'
+  MIN_LINE_COVERAGE: '50'
 
+jobs:
+  format:
+    name: Check formatting
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout source code
-        uses: actions/checkout@v4
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Setup Flutter
-        uses: subosito/flutter-action@v2
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Check code formatting
+        run: dart format --output=none --set-exit-if-changed lib test tool
+
+  analyze:
+    name: Analyze Dart and Flutter code
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
           cache: true
 
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Check code formatting
-        run: dart format --output=none --set-exit-if-changed lib test
-
       - name: Analyze project
         run: flutter analyze
 
-      - name: Run tests
-        run: flutter test
+  test:
+    name: Test and enforce coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Run unit and widget tests with coverage
+        run: flutter test --coverage --reporter expanded
+
+      - name: Enforce minimum line coverage
+        run: dart run tool/check_coverage.dart ${{ env.MIN_LINE_COVERAGE }}
+
+      - name: Upload coverage report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: flutter-coverage-${{ github.sha }}
+          path: coverage/lcov.info
+          if-no-files-found: error
+          retention-days: 14
+
+  secret-scan:
+    name: Scan repository for secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout complete history
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Reject tracked sensitive file types
+        shell: bash
+        run: |
+          blocked_files="$(git ls-files | grep -E '(^|/)\.env$|\.jks$|\.keystore$|(^|/)key\.properties$|service-account.*\.json$|google-play.*\.json$' || true)"
+
+          if [[ -n "$blocked_files" ]]; then
+            echo "Sensitive file types must not be committed:"
+            echo "$blocked_files"
+            exit 1
+          fi
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITLEAKS_ENABLE_COMMENTS: 'false'
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'false'
+
+  dependency-review:
+    name: Review dependency changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Block newly introduced high-risk dependencies
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4
+        with:
+          fail-on-severity: high
+
+  quality-gate:
+    name: Enforce quality and security gate
+    if: ${{ !cancelled() }}
+    needs:
+      - format
+      - analyze
+      - test
+      - secret-scan
+      - dependency-review
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require all blocking checks to pass
+        env:
+          FORMAT_RESULT: ${{ needs.format.result }}
+          ANALYZE_RESULT: ${{ needs.analyze.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          SECRET_RESULT: ${{ needs.secret-scan.result }}
+          DEPENDENCY_RESULT: ${{ needs.dependency-review.result }}
+        shell: bash
+        run: |
+          echo "Format: $FORMAT_RESULT"
+          echo "Analyze: $ANALYZE_RESULT"
+          echo "Test/coverage: $TEST_RESULT"
+          echo "Secret scan: $SECRET_RESULT"
+          echo "Dependency review: $DEPENDENCY_RESULT"
+
+          if [[ "$FORMAT_RESULT" != "success" || \
+                "$ANALYZE_RESULT" != "success" || \
+                "$TEST_RESULT" != "success" || \
+                "$SECRET_RESULT" != "success" ]]; then
+            echo "Quality or security gate failed."
+            exit 1
+          fi
+
+          if [[ "$DEPENDENCY_RESULT" != "success" && \
+                "$DEPENDENCY_RESULT" != "skipped" ]]; then
+            echo "Dependency review failed."
+            exit 1
+          fi
+
+          echo "Quality and security gate passed."
+
+  build-verification:
+    name: Verify Android development build
+    if: github.event_name != 'pull_request'
+    needs: quality-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Setup Java
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build development debug APK
+        run: >
+          flutter build apk
+          --debug
+          --flavor dev
+          --dart-define=APP_ENV=development
+          --dart-define=API_BASE_URL=https://gulftest.traitsolutions.in/RestApi/app_api
+          --dart-define=WEB_BASE_URL=https://gulftest.traitsolutions.in/RestApi/web_api/

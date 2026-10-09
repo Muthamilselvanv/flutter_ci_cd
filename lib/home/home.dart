@@ -9,7 +9,7 @@ class HomePage extends GetView<HomeController> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Environment Demo')),
+      appBar: AppBar(title: const Text('Flutter_CI/CD')),
       body: Padding(
         padding: const EdgeInsets.all(24),
         child: ListView(

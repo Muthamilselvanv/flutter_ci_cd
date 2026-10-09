@@ -14,7 +14,7 @@ void main() {
     // Build our app and trigger a frame.
     await tester.pumpWidget(const MyApp());
 
-    expect(find.text('Environment Demo'), findsOneWidget);
+    expect(find.text('Flutter_CI/CD'), findsOneWidget);
     expect(find.text('Environment: development'), findsOneWidget);
     expect(
       find.text('API: https://gulftest.traitsolutions.in/RestApi/app_api'),

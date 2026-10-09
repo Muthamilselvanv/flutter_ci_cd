@@ -1,5 +1,10 @@
 # Flutter environments and CI/CD practice
 
+The complete pre-production workflow, security, signing, environment, artifact,
+and release instructions are documented in
+[`docs/ci-cd-guide.md`](docs/ci-cd-guide.md). Google Play deployment is
+intentionally not implemented yet.
+
 This project demonstrates three separate configuration layers:
 
 1. Dart defines inject compile-time values into Dart code.
